@@ -2,6 +2,7 @@ import asyncio
 import websockets
 import json
 from typing import Dict, Any
+import sqlite3
 
 # --- MCP Server Implementation ---
 # This server accepts WebSocket connections and speaks JSON-RPC 2.0.
@@ -33,6 +34,17 @@ TOOLS = [
             },
             "required": ["a", "b"]
         }
+    },
+    {
+        "name": "employee_information",
+        "description": "Get information about employees. (Stub: not yet implemented)",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "department": {"type": "string", "description": "Department name (optional)"}
+            },
+            "required": []
+        }
     }
 ]
 
@@ -50,6 +62,34 @@ RESOURCES = [
 RESOURCE_CONTENTS = {
     "file:///example.txt": "Hello, this is the content of example.txt!"
 }
+
+# Initialize SQLite database and sample data if not exists
+def init_sqlite_db():
+    import os
+    db_path = os.path.join(os.path.dirname(__file__), 'company.db')
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS employees (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        department TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        hire_date TEXT NOT NULL
+    )''')
+    # Insert sample data if table is empty
+    c.execute('SELECT COUNT(*) FROM employees')
+    if c.fetchone()[0] == 0:
+        c.executemany('''INSERT INTO employees (name, department, email, hire_date) VALUES (?, ?, ?, ?)''', [
+            ('Alice Smith', 'Engineering', 'alice.smith@example.com', '2020-01-15'),
+            ('Bob Johnson', 'Marketing', 'bob.johnson@example.com', '2019-07-23'),
+            ('Carol Lee', 'Sales', 'carol.lee@example.com', '2021-03-10'),
+            ('David Kim', 'Engineering', 'david.kim@example.com', '2018-11-05'),
+            ('Eva Brown', 'HR', 'eva.brown@example.com', '2022-06-01')
+        ])
+    conn.commit()
+    conn.close()
+
+init_sqlite_db()
 
 # WebSocket connection handler (note websockets.serve() expects this signature)
 async def handle_jsonrpc(websocket):
@@ -110,6 +150,13 @@ async def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
                 }
             else:
                 raise ValueError("Missing arguments for add_numbers")
+        elif name == "employee_information":
+            # Stub implementation
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {"message": "This is a stub for employee_information. Not yet implemented."}
+            }
         else:
             raise ValueError(f"Unknown tool: {name}")
     # --- Resources discovery ---

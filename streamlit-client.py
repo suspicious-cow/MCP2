@@ -96,6 +96,28 @@ if st.button("Discover MCP Server"):
         except Exception as e:
             st.error(f"Error discovering tools/resources: {e}")
 
+# Button to show employees table
+if st.button("Show Employees Table"):
+    import sqlite3
+    import os
+    db_path = os.path.join("server", "company.db")
+    if not os.path.exists(db_path):
+        st.error(f"Database not found at {db_path}. Please ensure the server has initialized the database.")
+    else:
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        try:
+            c.execute("SELECT id, name, department, email, hire_date FROM employees")
+            rows = c.fetchall()
+            import pandas as pd
+            df = pd.DataFrame(rows, columns=["ID", "Name", "Department", "Email", "Hire Date"])
+            st.subheader("Employees Table")
+            st.dataframe(df)
+        except sqlite3.OperationalError as e:
+            st.error(f"Database error: {e}")
+        finally:
+            conn.close()
+
 if submitted:
     if not prompt.strip():
         st.warning("Please enter a prompt.")
