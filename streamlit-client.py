@@ -54,17 +54,47 @@ with st.form(key="prompt_form"):
     prompt = st.text_area("Enter your prompt:", key="prompt_input")
     submitted = st.form_submit_button("Send to OpenAI")
 
-# Button to discover tools
-if st.button("Discover MCP Tools"):
-    with st.spinner("Discovering tools from MCP server..."):
+# Button to discover tools and resources
+if st.button("Discover MCP Server"):
+    with st.spinner("Discovering tools and resources from MCP server..."):
         try:
             tools = asyncio.run(discover_mcp_tools())
+            # Discover resources
+            async def discover_mcp_resources():
+                uri = "ws://localhost:8765"
+                async with websockets.connect(uri) as websocket:
+                    # 1. Send initialize handshake
+                    initialize_req = {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {}
+                    }
+                    await websocket.send(json.dumps(initialize_req))
+                    await websocket.recv()  # Ignore handshake response for now
+
+                    # 2. Send resources/list request
+                    resources_list_req = {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "resources/list",
+                        "params": {}
+                    }
+                    await websocket.send(json.dumps(resources_list_req))
+                    resources_response = await websocket.recv()
+                    resources = json.loads(resources_response)["result"]
+                    return resources
+            resources = asyncio.run(discover_mcp_resources())
             st.session_state['mcp_tools'] = tools
+            st.session_state['mcp_resources'] = resources
             st.session_state['openai_functions'] = [mcp_tool_to_openai_function(tool) for tool in tools]
-            st.success("Discovered tools:")
+            st.success("Discovered tools and resources:")
+            st.subheader("Tools")
             st.json(tools)
+            st.subheader("Resources")
+            st.json(resources)
         except Exception as e:
-            st.error(f"Error discovering tools: {e}")
+            st.error(f"Error discovering tools/resources: {e}")
 
 if submitted:
     if not prompt.strip():
