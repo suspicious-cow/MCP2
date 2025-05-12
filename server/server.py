@@ -37,11 +37,11 @@ TOOLS = [
     },
     {
         "name": "employee_information",
-        "description": "Get information about employees. (Stub: not yet implemented)",
+        "description": "Get information about employees filtered by department (case-insensitive). Leave department empty to get all employees.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "department": {"type": "string", "description": "Department name (optional)"}
+                "department": {"type": "string", "description": "Department name (optional, case-insensitive)"}
             },
             "required": []
         }
@@ -93,23 +93,46 @@ init_sqlite_db()
 
 # WebSocket connection handler (note websockets.serve() expects this signature)
 async def handle_jsonrpc(websocket):
-    print("Client connected!")
+    client_info = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
+    print(f"Client connected from {client_info}!")
     async for message in websocket:
         try:
+            print(f"[DEBUG] Received message from {client_info}: {message}")
             request = json.loads(message)
-            print(f"Received message: {request}")
+            
+            # Log method and params
+            method = request.get("method")
+            params = request.get("params", {})
+            req_id = request.get("id")
+            print(f"[DEBUG] Processing {method} request (id={req_id}) with params: {json.dumps(params)}")
+            
+            # Process the request
             response = await handle_request(request)
+            
             if response is not None:
-                print(f"Sending response: {response}")
+                # Pretty print the response for logging
+                response_pretty = json.dumps(response, indent=2)
+                print(f"[DEBUG] Sending response for {method}:\n{response_pretty}")
                 await websocket.send(json.dumps(response))
+        except json.JSONDecodeError as je:
+            print(f"[DEBUG] JSON decode error: {je}")
+            # Send JSON-RPC error response for malformed JSON
+            error_response = {
+                "jsonrpc": "2.0",
+                "id": None,  # We can't know the id if JSON parsing failed
+                "error": {"code": -32700, "message": f"Parse error: {str(je)}"}
+            }
+            print(f"[DEBUG] Sending parse error response")
+            await websocket.send(json.dumps(error_response))
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"[DEBUG] Error processing request: {e}")
             # Send JSON-RPC error response
             error_response = {
                 "jsonrpc": "2.0",
                 "id": request.get("id") if 'request' in locals() else None,
                 "error": {"code": -32603, "message": str(e)}
             }
+            print(f"[DEBUG] Sending error response: {error_response}")
             await websocket.send(json.dumps(error_response))
 
 async def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
@@ -139,26 +162,108 @@ async def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
     elif method == "tools/call":
         name = params.get("name")
         arguments = params.get("arguments", {})
-        if name == "add_numbers":
-            a = arguments.get("a")
-            b = arguments.get("b")
-            if a is not None and b is not None:
-                return {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {"sum": a + b}
-                }
-            else:
-                raise ValueError("Missing arguments for add_numbers")
-        elif name == "employee_information":
-            # Stub implementation
+        print(f"[DEBUG] Calling tool '{name}' with arguments: {json.dumps(arguments)}")
+        
+        # Check if the tool exists
+        tool_exists = any(tool["name"] == name for tool in TOOLS)
+        if not tool_exists:
+            print(f"[ERROR] Unknown tool: {name}")
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {"message": "This is a stub for employee_information. Not yet implemented."}
+                "error": {"code": -32602, "message": f"Unknown tool: {name}"}
             }
-        else:
-            raise ValueError(f"Unknown tool: {name}")
+            
+        try:
+            if name == "add_numbers":
+                a = arguments.get("a")
+                b = arguments.get("b")
+                if a is None or b is None:
+                    print(f"[ERROR] Missing arguments for add_numbers: a={a}, b={b}")
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {"code": -32602, "message": f"Missing required arguments for add_numbers: a={a}, b={b}"}
+                    }
+                
+                # Validate types
+                if not (isinstance(a, (int, float)) and isinstance(b, (int, float))):
+                    print(f"[ERROR] Invalid argument types for add_numbers: a={type(a)}, b={type(b)}")
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {"code": -32602, "message": f"Arguments must be numbers: a={type(a)}, b={type(b)}"}
+                    }
+                    
+                result = {"sum": a + b}
+                print(f"[DEBUG] add_numbers result: {result}")
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": result
+                }
+                
+            elif name == "employee_information":
+                # Query employees from SQLite database, optionally filter by department
+                import os
+                db_path = os.path.join(os.path.dirname(__file__), 'company.db')
+                
+                if not os.path.exists(db_path):
+                    print(f"[ERROR] Database file not found: {db_path}")
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {"code": -32603, "message": "Database file not found"}
+                    }
+                
+                try:
+                    conn = sqlite3.connect(db_path)
+                    c = conn.cursor()
+                    department = arguments.get("department")
+                    
+                    if department:
+                        print(f"[DEBUG] Filtering employees by department: {department}")
+                        # Use case-insensitive search with LOWER() function
+                        c.execute("SELECT id, name, department, email, hire_date FROM employees WHERE LOWER(department) = LOWER(?)", (department,))
+                    else:
+                        print(f"[DEBUG] Getting all employees")
+                        c.execute("SELECT id, name, department, email, hire_date FROM employees")
+                        
+                    rows = c.fetchall()
+                    conn.close()
+                    
+                    employees = [
+                        {"id": row[0], "name": row[1], "department": row[2], "email": row[3], "hire_date": row[4]}
+                        for row in rows
+                    ]
+                    
+                    print(f"[DEBUG] Found {len(employees)} employees")
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": {"employees": employees}
+                    }
+                except sqlite3.Error as e:
+                    print(f"[ERROR] Database error: {e}")
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {"code": -32603, "message": f"Database error: {str(e)}"}
+                    }
+            else:
+                # This shouldn't happen due to the check at the beginning, but just in case
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32602, "message": f"Unknown tool: {name}"}
+                }
+        except Exception as e:
+            print(f"[ERROR] Exception while calling tool {name}: {e}")
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {"code": -32603, "message": f"Internal error: {str(e)}"}
+            }
     # --- Resources discovery ---
     elif method == "resources/list":
         return {
